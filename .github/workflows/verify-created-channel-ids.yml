@@ -1,0 +1,57 @@
+name: Verify created channel IDs
+on:
+  push:
+    branches: [codex/verify-created-channel-ids]
+permissions:
+  contents: read
+jobs:
+  databases:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, mysql, postgres]
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: synthetic-ci-only
+          MYSQL_DATABASE: channel_ids_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -psynthetic-ci-only"
+          --health-interval=10s --health-timeout=5s --health-retries=15
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: channel_test
+          POSTGRES_PASSWORD: synthetic-ci-only
+          POSTGRES_DB: channel_ids_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U channel_test -d channel_ids_test"
+          --health-interval=10s --health-timeout=5s --health-retries=15
+    env:
+      GOWORK: 'off'
+      GOMAXPROCS: '2'
+      GOMEMLIMIT: 4GiB
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+      - name: Verify database and channel creation contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          case '${{ matrix.database }}' in
+            mysql) export TEST_CHANNEL_SQL_DSN='root:synthetic-ci-only@tcp(127.0.0.1:3306)/channel_ids_test?charset=utf8mb4&parseTime=True&loc=Local' ;;
+            postgres) export TEST_CHANNEL_SQL_DSN='postgres://channel_test:synthetic-ci-only@127.0.0.1:5432/channel_ids_test?sslmode=disable' ;;
+            sqlite) unset TEST_CHANNEL_SQL_DSN ;;
+          esac
+          go version
+          go test -p 2 ./controller -run '^TestAddChannel' -count=1 -v
+      - name: Vet changed packages
+        if: matrix.database == 'sqlite'
+        run: go vet -p 2 ./controller ./model
