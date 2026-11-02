@@ -52,6 +52,11 @@ jobs:
           esac
           go version
           go test -p 2 ./controller -run '^TestAddChannel' -count=1 -v
-      - name: Vet changed packages
+      - name: Test and build affected packages
         if: matrix.database == 'sqlite'
-        run: go vet -p 2 ./controller ./model
+        run: |
+          go test -p 2 ./controller ./model -count=1
+          go vet -p 2 ./controller ./model
+          mkdir -p web/dist
+          touch web/dist/index.html
+          go build -p 2 ./...
