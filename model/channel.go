@@ -45,12 +45,15 @@ type Channel struct {
 	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
 	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
 	AutoBan           *int    `json:"auto_ban" gorm:"default:1"`
-	OtherInfo         string  `json:"other_info"`
-	Tag               *string `json:"tag" gorm:"index"`
-	Setting           *string `json:"setting" gorm:"type:text"` // 渠道额外设置
-	ParamOverride     *string `json:"param_override" gorm:"type:text"`
-	HeaderOverride    *string `json:"header_override" gorm:"type:text"`
-	Remark            *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	// RpmLimit caps real upstream requests for this channel in a rolling
+	// 60-second window. Nil preserves the legacy unlimited behavior.
+	RpmLimit       *int    `json:"rpm_limit"`
+	OtherInfo      string  `json:"other_info"`
+	Tag            *string `json:"tag" gorm:"index"`
+	Setting        *string `json:"setting" gorm:"type:text"` // 渠道额外设置
+	ParamOverride  *string `json:"param_override" gorm:"type:text"`
+	HeaderOverride *string `json:"header_override" gorm:"type:text"`
+	Remark         *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
 	// add after v0.8.5
 	ChannelInfo ChannelInfo `json:"channel_info" gorm:"type:json"`
 

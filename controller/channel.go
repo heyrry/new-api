@@ -533,6 +533,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
 		return fmt.Errorf("channel cannot be empty")
 	}
+	if channel.RpmLimit != nil && *channel.RpmLimit <= 0 {
+		return fmt.Errorf("rpm_limit must be a positive integer")
+	}
 
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
@@ -1263,6 +1266,15 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// GORM skips nil pointer fields in struct Updates. Preserve an explicit
+	// JSON null so operators can clear a previously configured channel limit.
+	if value, provided := requestData["rpm_limit"]; provided && value == nil {
+		if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("rpm_limit", nil).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		channel.RpmLimit = nil
+	}
 	model.InitChannelCache()
 	if proxyChanged {
 		service.InvalidateProxyClient(originProxy)
@@ -1283,6 +1295,9 @@ func UpdateChannel(c *gin.Context) {
 	}
 	if channel.Key != "" && channel.Key != originChannel.Key {
 		changedFields = append(changedFields, "key")
+	}
+	if !equalIntPtr(channel.RpmLimit, originChannel.RpmLimit) {
+		changedFields = append(changedFields, "rpm_limit")
 	}
 	updateAudit := map[string]any{
 		"id":             channel.Id,
@@ -1373,6 +1388,16 @@ func isManageableChannelStatus(status int) bool {
 
 // equalStringPtr 比较两个 *string 是否相等（均为 nil 视为相等）。
 func equalStringPtr(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func equalIntPtr(a, b *int) bool {
 	if a == nil && b == nil {
 		return true
 	}

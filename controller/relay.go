@@ -202,6 +202,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		if rpmErr := acquireChannelRPMLimit(c, channel); rpmErr != nil {
+			newAPIError = rpmErr
+			relayInfo.LastError = rpmErr
+			decision := service.DecideRelayRetry(c, rpmErr, common.RetryTimes-retryParam.GetRetry())
+			service.RecordPolicyFailure(c, channel.Id, rpmErr, decision)
+			if decision.Action == "retry" {
+				continue
+			}
+			break
+		}
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
@@ -237,6 +247,21 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		retryLogStr := common.LogText("retry: %s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
+}
+
+func acquireChannelRPMLimit(c *gin.Context, channel *model.Channel) *types.NewAPIError {
+	if channel == nil || channel.RpmLimit == nil || *channel.RpmLimit <= 0 {
+		return nil
+	}
+	keyIndex := common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+	allowed, err := service.AllowChannelRPMLimit(c.Request.Context(), channel.Id, keyIndex, *channel.RpmLimit)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeBadResponseStatusCode, http.StatusServiceUnavailable)
+	}
+	if !allowed {
+		return types.NewErrorWithStatusCode(service.ErrChannelRPMLimitReached, types.ErrorCodeBadResponseStatusCode, http.StatusTooManyRequests)
+	}
+	return nil
 }
 
 func writeRelayStreamError(c *gin.Context, format types.RelayFormat, apiError *types.NewAPIError) {
@@ -551,11 +576,9 @@ func executeTaskSubmissionWith(
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
 			channel = lockedCh
 			policy.BeginAttempt(channel, relayInfo.UsingGroup)
-			if retryParam.GetRetry() > 0 {
-				if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
-					taskErr = service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError)
-					break
-				}
+			if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
+				taskErr = service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError)
+				break
 			}
 		} else {
 			var channelErr *types.NewAPIError
@@ -566,8 +589,6 @@ func executeTaskSubmissionWith(
 				break
 			}
 		}
-		diagnostics.attempt(retryParam.GetRetry()+1, channel, relayInfo.LockedChannel != nil)
-
 		service.AppendUsedChannel(c, channel.Id)
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
@@ -580,6 +601,17 @@ func executeTaskSubmissionWith(
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		if rpmErr := acquireChannelRPMLimit(c, channel); rpmErr != nil {
+			relayInfo.LastError = rpmErr
+			decision := service.DecideRelayRetry(c, rpmErr, common.RetryTimes-retryParam.GetRetry())
+			service.RecordPolicyFailure(c, channel.Id, rpmErr, decision)
+			if decision.Action == "retry" {
+				continue
+			}
+			taskErr = service.TaskErrorWrapperLocal(rpmErr.Err, "channel_rpm_limited", rpmErr.StatusCode)
+			break
+		}
+		diagnostics.attempt(retryParam.GetRetry()+1, channel, relayInfo.LockedChannel != nil)
 
 		stage = "submit"
 		result, taskErr = submit(c, relayInfo)
